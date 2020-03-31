@@ -20,16 +20,17 @@ import (
 	"regexp"
 	"strings"
 
+	itypes "agola.io/agola/internal/services/types"
 	"agola.io/agola/internal/util"
 	"agola.io/agola/services/types"
 
 	"github.com/ghodss/yaml"
-	"github.com/google/go-jsonnet"
 	errors "golang.org/x/xerrors"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
+	maxConfigSize     = 1024 * 1024 // 1MiB
 	maxRunNameLength  = 100
 	maxTaskNameLength = 100
 	maxStepNameLength = 100
@@ -43,6 +44,7 @@ const (
 	// ConfigFormatJSON handles both json or yaml format (since json is a subset of yaml)
 	ConfigFormatJSON ConfigFormat = iota
 	ConfigFormatJsonnet
+	ConfigFormatStarlark
 )
 
 var (
@@ -645,16 +647,41 @@ func (r *Run) Task(taskName string) *Task {
 
 var DefaultConfig = Config{}
 
-func ParseConfig(configData []byte, format ConfigFormat) (*Config, error) {
-	// Generate json from jsonnet
-	if format == ConfigFormatJsonnet {
-		// TODO(sgotti) support custom import files inside the configdir ???
-		vm := jsonnet.MakeVM()
-		out, err := vm.EvaluateSnippet("", string(configData))
+// ConfigContext is the context to pass to the config generator. Fields are not marked as omitempty since
+// we want to provide all of them with empty value if not existing in such context
+// (i.e. pull_request_id will be an empty string when not a pull request)
+type ConfigContext struct {
+	RefType       itypes.RunRefType `json:"ref_type"`
+	Ref           string            `json:"ref"`
+	Branch        string            `json:"branch"`
+	Tag           string            `json:"tag"`
+	PullRequestID string            `json:"pull_request_id"`
+	CommitSHA     string            `json:"commit_sha"`
+}
+
+func ParseConfig(configData []byte, format ConfigFormat, configContext *ConfigContext) (*Config, error) {
+	// TODO(sgotti) execute jsonnet and starlark executor in a
+	// separate process to avoid issues with malformat config that
+	// could lead to infinite executions and memory exhaustion
+	switch format {
+	case ConfigFormatJsonnet:
+		// Generate json from jsonnet
+		var err error
+		configData, err = execJsonnet(configData, configContext)
 		if err != nil {
-			return nil, errors.Errorf("failed to evaluate jsonnet config: %w", err)
+			return nil, errors.Errorf("failed to execute jsonnet: %w", err)
 		}
-		configData = []byte(out)
+	case ConfigFormatStarlark:
+		// Generate json from starlark
+		var err error
+		configData, err = execStarlark(configData, configContext)
+		if err != nil {
+			return nil, errors.Errorf("failed to execute starlark: %w", err)
+		}
+	}
+
+	if len(configData) > maxConfigSize {
+		return nil, errors.Errorf("config size is greater than allowed max config size: %d > %d", len(configData), maxConfigSize)
 	}
 
 	config := DefaultConfig

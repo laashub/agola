@@ -38,10 +38,11 @@ import (
 const (
 	defaultSSHPort = "22"
 
-	agolaDefaultConfigDir         = ".agola"
-	agolaDefaultJsonnetConfigFile = "config.jsonnet"
-	agolaDefaultJsonConfigFile    = "config.json"
-	agolaDefaultYamlConfigFile    = "config.yml"
+	agolaDefaultConfigDir          = ".agola"
+	agolaDefaultStarlarkConfigFile = "config.star"
+	agolaDefaultJsonnetConfigFile  = "config.jsonnet"
+	agolaDefaultJsonConfigFile     = "config.json"
+	agolaDefaultYamlConfigFile     = "config.yml"
 
 	// List of runs annotations
 	AnnotationRunType   = "run_type"
@@ -410,15 +411,17 @@ func (h *ActionHandler) CreateRuns(ctx context.Context, req *CreateRunRequest) e
 
 	// this env vars overrides other env vars
 	env := map[string]string{
-		"CI":                   "true",
-		"AGOLA_SSHPRIVKEY":     req.SSHPrivKey,
-		"AGOLA_REPOSITORY_URL": req.CloneURL,
-		"AGOLA_GIT_HOST":       gitHost,
-		"AGOLA_GIT_PORT":       gitPort,
-		"AGOLA_GIT_BRANCH":     req.Branch,
-		"AGOLA_GIT_TAG":        req.Tag,
-		"AGOLA_GIT_REF":        req.Ref,
-		"AGOLA_GIT_COMMITSHA":  req.CommitSHA,
+		"CI":                    "true",
+		"AGOLA_SSHPRIVKEY":      req.SSHPrivKey,
+		"AGOLA_REPOSITORY_URL":  req.CloneURL,
+		"AGOLA_GIT_HOST":        gitHost,
+		"AGOLA_GIT_PORT":        gitPort,
+		"AGOLA_GIT_BRANCH":      req.Branch,
+		"AGOLA_GIT_TAG":         req.Tag,
+		"AGOLA_PULL_REQUEST_ID": req.PullRequestID,
+		"AGOLA_GIT_REF_TYPE":    string(req.RefType),
+		"AGOLA_GIT_REF":         req.Ref,
+		"AGOLA_GIT_COMMITSHA":   req.CommitSHA,
 	}
 
 	if req.SSHHostKey != "" {
@@ -487,6 +490,8 @@ func (h *ActionHandler) CreateRuns(ctx context.Context, req *CreateRunRequest) e
 
 	var configFormat config.ConfigFormat
 	switch path.Ext(filename) {
+	case ".star":
+		configFormat = config.ConfigFormatStarlark
 	case ".jsonnet":
 		configFormat = config.ConfigFormatJsonnet
 	case ".json":
@@ -495,7 +500,17 @@ func (h *ActionHandler) CreateRuns(ctx context.Context, req *CreateRunRequest) e
 		configFormat = config.ConfigFormatJSON
 
 	}
-	config, err := config.ParseConfig([]byte(data), configFormat)
+
+	configContext := &config.ConfigContext{
+		RefType:       req.RefType,
+		Ref:           req.Ref,
+		Branch:        req.Branch,
+		Tag:           req.Tag,
+		PullRequestID: req.PullRequestID,
+		CommitSHA:     req.CommitSHA,
+	}
+
+	config, err := config.ParseConfig([]byte(data), configFormat, configContext)
 	if err != nil {
 		h.log.Errorf("failed to parse config: %+v", err)
 
@@ -554,7 +569,7 @@ func (h *ActionHandler) fetchConfigFiles(ctx context.Context, gitSource gitsourc
 	var data []byte
 	var filename string
 	err := util.ExponentialBackoff(ctx, util.FetchFileBackoff, func() (bool, error) {
-		for _, filename = range []string{agolaDefaultJsonnetConfigFile, agolaDefaultJsonConfigFile, agolaDefaultYamlConfigFile} {
+		for _, filename = range []string{agolaDefaultStarlarkConfigFile, agolaDefaultJsonnetConfigFile, agolaDefaultJsonConfigFile, agolaDefaultYamlConfigFile} {
 			var err error
 			data, err = gitSource.GetFile(repopath, commitSHA, path.Join(agolaDefaultConfigDir, filename))
 			if err == nil {

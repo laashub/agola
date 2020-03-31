@@ -656,11 +656,13 @@ func (s *Runservice) updateRunTaskStatus(ctx context.Context, et *types.Executor
 		}
 	case types.ExecutorTaskPhaseStopped:
 		if rt.Status != types.RunTaskStatusStopped &&
+			rt.Status != types.RunTaskStatusNotStarted &&
 			rt.Status != types.RunTaskStatusRunning {
 			wrongstatus = true
 		}
 	case types.ExecutorTaskPhaseSuccess:
 		if rt.Status != types.RunTaskStatusSuccess &&
+			rt.Status != types.RunTaskStatusNotStarted &&
 			rt.Status != types.RunTaskStatusRunning {
 			wrongstatus = true
 		}
@@ -672,7 +674,7 @@ func (s *Runservice) updateRunTaskStatus(ctx context.Context, et *types.Executor
 		}
 	}
 	if wrongstatus {
-		log.Warnf("wrong executor task %q status: %q, rt status: %q", et.ID, et.Status.Phase, rt.Status)
+		log.Warnf("ignoring wrong executor task %q status: %q, rt status: %q", et.ID, et.Status.Phase, rt.Status)
 		return nil
 	}
 
@@ -888,7 +890,7 @@ func (s *Runservice) fetchLog(ctx context.Context, rt *types.RunTask, setup bool
 		return err
 	}
 	if et == nil {
-		if !rt.Skip {
+		if rt.Status != types.RunTaskStatusSkipped {
 			log.Errorf("executor task with id %q doesn't exist. This shouldn't happen. Skipping fetching", rt.ID)
 		}
 		return nil
@@ -1051,7 +1053,9 @@ func (s *Runservice) fetchArchive(ctx context.Context, rt *types.RunTask, stepnu
 		return err
 	}
 	if et == nil {
-		log.Errorf("executor task with id %q doesn't exist. This shouldn't happen. Skipping fetching", rt.ID)
+		if rt.Status != types.RunTaskStatusSkipped {
+			log.Errorf("executor task with id %q doesn't exist. This shouldn't happen. Skipping fetching", rt.ID)
+		}
 		return nil
 	}
 	executor, err := store.GetExecutor(ctx, s.e, et.Spec.ExecutorID)
